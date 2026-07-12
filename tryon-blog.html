@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Try-On, No Server Attached — Virtual Try-On with LiteRT.js</title>
+  <meta name="description"
+    content="A browser-native virtual try-on app: segmentation, pose estimation and a thin-plate-spline garment warp, all on-device via LiteRT.js on WebGPU.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+    rel="stylesheet">
+  <style>
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    :root {
+      --k: #0A0A0A;
+      --w: #FAFAF5;
+      --y: #FFE500;
+      --r: #FF2D20;
+      --b: #2955FF;
+      --g: #00FF88;
+      --p: #FF6BD6;
+      --o: #FF7043;
+      --bdr: 4px solid var(--k);
+      --bdr5: 5px solid var(--k);
+      --sh: 6px 6px 0 var(--k);
+      --sh-lg: 10px 10px 0 var(--k);
+    }
+
+    html {
+      scroll-behavior: smooth
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto
+      }
+
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important
+      }
+    }
+
+    body {
+      font-family: 'Space Grotesk', sans-serif;
+      background: var(--w);
+      color: var(--k);
+      font-size: 1.0625rem;
+      line-height: 1.75;
+      cursor: none;
+      overflow-x: hidden
+    }
+
+    /* ── CURSOR ── */
+    #cur {
+      width: 18px;
+      height: 18px;
+      background: var(--y);
+      border: 3px solid var(--k);
+      border-radius: 50%;
+      position: fixed;
+      pointer-events: none;
+      z-index: 9999;
+      transform: translate(-50%, -50%);
+      transition: width .15s, height .15s, background .15s
+    }
+
+    #cur.big {
+      width: 38px;
+      height: 38px;
+      background: var(--r)
+    }
+
+    /* ── SCROLL BAR ── */
+    #prog {
+      position: fixed;
+      top: 0;
+      left: 0;
+      height: 5px;
+      background: var(--r);
+      z-index: 300;
+      width: 0%;
+      transition: width .05s linear
+    }
+
+    /* ── NAV ── */
+    nav {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 200;
+      background: var(--y);
+      border-bottom: var(--bdr5);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 48px
+    }
+
+    .nav-logo {
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 1rem;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      text-decoration: none;
+      color: var(--k)
+    }
+
+    .nav-back {
+      font-family: 'Space Mono', monospace;
+      font-size: .8rem;
+      font-weight: 700;
+      text-decoration: none;
+      color: var(--k);
+      text-transform: uppercase;
+      padding: 6px 14px;
+      border: 3px solid var(--k);
+      background: var(--w);
+      transition: all .1s
+    }
+
+    .nav-back:hover {
+      background: var(--k);
+      color: var(--y);
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 var(--k)
+    }
+
+    .wrap {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 0 24px
+    }
+
+    /* ── HEADER ── */
+    header {
+      padding: 140px 0 0
+    }
+
+    .eyebrow {
+      display: inline-block;
+      background: var(--g);
+      border: var(--bdr);
+      padding: 5px 14px;
+      font-family: 'Space Mono', monospace;
+      font-size: .7rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      box-shadow: var(--sh);
+      margin-bottom: 26px
+    }
+
+    h1 {
+      font-weight: 700;
+      font-size: clamp(2.2rem, 5.4vw, 3.6rem);
+      line-height: 1.05;
+      letter-spacing: -2px;
+      margin-bottom: 22px
+    }
+
+    .dek {
+      font-family: 'Space Mono', monospace;
+      font-size: .95rem;
+      color: #444;
+      max-width: 60ch;
+      line-height: 1.7;
+      border-left: 5px solid var(--r);
+      padding-left: 16px
+    }
+
+    .byline {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 28px;
+      font-family: 'Space Mono', monospace;
+      font-size: .75rem;
+      font-weight: 700;
+      text-transform: uppercase
+    }
+
+    .byline .read-time {
+      padding: 5px 12px;
+      border: 3px solid var(--k);
+      background: var(--y)
+    }
+
+    .byline a {
+      color: var(--k);
+      text-decoration: none;
+      padding: 5px 12px;
+      border: 3px solid var(--k);
+      background: var(--w);
+      transition: all .1s
+    }
+
+    .byline a:hover,
+    .byline a:focus-visible {
+      background: var(--k);
+      color: var(--y);
+      transform: translate(-2px, -2px);
+      box-shadow: 4px 4px 0 var(--k)
+    }
+
+    /* ── SEAM DIVIDER ── */
+    .seam {
+      border: none;
+      height: 0;
+      border-top: 4px dashed var(--k);
+      margin: 56px 0;
+      position: relative
+    }
+
+    .seam::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: -9px;
+      transform: translateX(-50%) rotate(45deg);
+      width: 14px;
+      height: 14px;
+      background: var(--y);
+      border: 3px solid var(--k)
+    }
+
+    /* ── ARTICLE ── */
+    article h2 {
+      font-weight: 700;
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      line-height: 1.15;
+      letter-spacing: -1px;
+      margin: 0 0 20px
+    }
+
+    article h2 .hl {
+      position: relative;
+      display: inline-block
+    }
+
+    article h2 .hl::after {
+      content: '';
+      position: absolute;
+      bottom: 3px;
+      left: 0;
+      right: 0;
+      height: 12px;
+      background: var(--y);
+      z-index: -1
+    }
+
+    article p {
+      margin-bottom: 1.15em
+    }
+
+    article p:last-child {
+      margin-bottom: 0
+    }
+
+    article a {
+      color: var(--k);
+      font-weight: 600;
+      text-decoration: none;
+      border-bottom: 3px solid var(--b);
+      transition: all .1s
+    }
+
+    article a:hover,
+    article a:focus-visible {
+      background: var(--b);
+      color: var(--w)
+    }
+
+    strong {
+      font-weight: 700
+    }
+
+    code {
+      font-family: 'Space Mono', monospace;
+      font-size: .82em;
+      background: rgba(10, 10, 10, .08);
+      border: 1px solid rgba(10, 10, 10, .2);
+      padding: .08em .35em
+    }
+
+    pre {
+      font-family: 'Space Mono', monospace;
+      font-size: .8rem;
+      line-height: 1.6;
+      background: var(--k);
+      color: var(--g);
+      padding: 24px 26px;
+      border: var(--bdr5);
+      box-shadow: var(--sh-lg);
+      overflow-x: auto;
+      margin: 32px 0
+    }
+
+    pre code {
+      background: none;
+      border: none;
+      padding: 0
+    }
+
+    /* ── PIPELINE STEPS ── */
+    ol.pipeline {
+      counter-reset: step;
+      list-style: none;
+      margin: 30px 0
+    }
+
+    ol.pipeline li {
+      counter-increment: step;
+      position: relative;
+      padding: 0 0 26px 58px
+    }
+
+    ol.pipeline li::before {
+      content: counter(step, decimal-leading-zero);
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-family: 'Space Mono', monospace;
+      font-size: .8rem;
+      font-weight: 700;
+      background: var(--y);
+      border: 3px solid var(--k);
+      box-shadow: 3px 3px 0 var(--k);
+      width: 36px;
+      height: 36px;
+      display: flex;
+      align-items: center;
+      justify-content: center
+    }
+
+    ol.pipeline li:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      left: 17px;
+      top: 44px;
+      bottom: 4px;
+      border-left: 3px dashed var(--k)
+    }
+
+    figure {
+      margin: 36px 0
+    }
+
+    figure img {
+      width: 100%;
+      display: block;
+      border: var(--bdr5);
+      box-shadow: var(--sh-lg)
+    }
+
+    figcaption {
+      font-family: 'Space Mono', monospace;
+      font-size: .72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #777;
+      margin-top: 16px
+    }
+
+    /* ── COMPARISON SLIDER ── */
+    .compare-section {
+      background: #fff;
+      border: var(--bdr5);
+      box-shadow: var(--sh-lg);
+      padding: 28px;
+      margin: 40px 0
+    }
+
+    .compare-label {
+      display: inline-block;
+      font-family: 'Space Mono', monospace;
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      background: var(--p);
+      border: 3px solid var(--k);
+      padding: 4px 12px;
+      margin-bottom: 18px;
+      box-shadow: 3px 3px 0 var(--k)
+    }
+
+    .compare {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 4/5;
+      max-height: 560px;
+      border: var(--bdr);
+      overflow: hidden;
+      background: #EDECE5;
+      touch-action: none;
+      cursor: ew-resize
+    }
+
+    .compare .layer {
+      position: absolute;
+      inset: 0
+    }
+
+    .compare .layer svg,
+    .compare .layer img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block
+    }
+
+    .compare .after {
+      clip-path: inset(0 0 0 50%)
+    }
+
+    .compare .handle {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: 50%;
+      width: 0;
+      border-left: 4px solid var(--k);
+      pointer-events: none
+    }
+
+    .compare .handle::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--y);
+      border: 4px solid var(--k);
+      box-shadow: 4px 4px 0 var(--k)
+    }
+
+    .compare .handle::after {
+      content: "◂ ▸";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: .7rem;
+      font-weight: 700;
+      color: var(--k);
+      letter-spacing: 2px
+    }
+
+    .compare .tag {
+      position: absolute;
+      top: 12px;
+      font-family: 'Space Mono', monospace;
+      font-size: .65rem;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      background: var(--k);
+      color: var(--y);
+      border: 2px solid var(--k);
+      padding: 4px 10px;
+      pointer-events: none
+    }
+
+    .tag-before {
+      left: 12px
+    }
+
+    .tag-after {
+      right: 12px
+    }
+
+    .compare input[type=range] {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      cursor: ew-resize;
+      margin: 0
+    }
+
+    .compare-hint {
+      font-family: 'Space Mono', monospace;
+      font-size: .72rem;
+      color: #777;
+      margin-top: 14px;
+      line-height: 1.6
+    }
+
+    /* ── PERF STRIP ── */
+    .perf {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      margin: 34px 0
+    }
+
+    .perf .cell {
+      background: #fff;
+      border: var(--bdr5);
+      box-shadow: var(--sh);
+      padding: 24px 24px 20px;
+      transition: transform .18s, box-shadow .18s
+    }
+
+    .perf .cell:hover {
+      transform: translate(-3px, -3px);
+      box-shadow: var(--sh-lg)
+    }
+
+    .perf .cell.fast {
+      background: var(--y)
+    }
+
+    .perf .mode {
+      font-family: 'Space Mono', monospace;
+      font-size: .68rem;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase
+    }
+
+    .perf .num {
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      font-size: 1.9rem;
+      margin: 8px 0 4px;
+      line-height: 1.1
+    }
+
+    .perf .note {
+      font-size: .85rem;
+      color: #333;
+      line-height: 1.55
+    }
+
+    @media(max-width:560px) {
+      .perf {
+        grid-template-columns: 1fr
+      }
+    }
+
+    /* ── CTA ── */
+    .cta {
+      background: var(--k);
+      color: var(--w);
+      border: var(--bdr5);
+      box-shadow: var(--sh-lg);
+      padding: 38px 34px;
+      margin: 44px 0 0
+    }
+
+    .cta h2 {
+      color: var(--w);
+      font-weight: 700;
+      font-size: 1.7rem;
+      letter-spacing: -1px;
+      margin-bottom: 10px
+    }
+
+    .cta p {
+      color: #bbb;
+      margin-bottom: 24px
+    }
+
+    .cta .buttons {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap
+    }
+
+    .cta a {
+      font-family: 'Space Grotesk', sans-serif;
+      font-weight: 700;
+      font-size: .9rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      text-decoration: none;
+      padding: 13px 24px;
+      transition: all .1s
+    }
+
+    .cta a.primary {
+      background: var(--y);
+      color: var(--k);
+      border: 3px solid var(--y)
+    }
+
+    .cta a.primary:hover,
+    .cta a.primary:focus-visible {
+      background: var(--g);
+      border-color: var(--g);
+      transform: translate(-3px, -3px);
+      box-shadow: 6px 6px 0 var(--g)
+    }
+
+    .cta a.ghost {
+      border: 3px solid #444;
+      color: var(--w)
+    }
+
+    .cta a.ghost:hover,
+    .cta a.ghost:focus-visible {
+      border-color: var(--y);
+      color: var(--y);
+      transform: translate(-3px, -3px);
+      box-shadow: 6px 6px 0 var(--y)
+    }
+
+    /* ── FOOTER ── */
+    footer {
+      background: var(--y);
+      border-top: var(--bdr5);
+      margin-top: 72px;
+      padding: 22px 24px;
+      text-align: center
+    }
+
+    footer p {
+      font-family: 'Space Mono', monospace;
+      font-size: .75rem;
+      font-weight: 700
+    }
+
+    @media(max-width:900px) {
+      nav {
+        padding: 12px 20px
+      }
+
+      header {
+        padding-top: 120px
+      }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div id="cur"></div>
+  <div id="prog"></div>
+
+  <nav>
+    <a class="nav-logo" href="index.html">PKV.dev</a>
+    <a class="nav-back" href="index.html#blog">← Portfolio</a>
+  </nav>
+
+  <header class="wrap">
+    <p class="eyebrow">On-device ML · WebGPU · LiteRT.js</p>
+    <h1>Try-On, No Server Attached</h1>
+    <p class="dek">A virtual try-on app that runs two ML models and a garment warp entirely in the browser. No
+      inference bill, no upload — the camera feed never leaves the device.</p>
+    <div class="byline">
+      <span class="read-time">~7 min read</span>
+      <a href="https://pravoobi.github.io/try-on/" target="_blank" rel="noopener">Live demo</a>
+      <a href="https://github.com/pravoobi/try-on" target="_blank" rel="noopener">Source on GitHub</a>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <hr class="seam">
+
+    <article>
+
+      <h2>The trade-off nobody <span class="hl">talks about</span></h2>
+      <p>Most virtual try-on products today ship a server-side diffusion model. The renders look great — and every
+        single preview costs money, adds latency, and requires the shopper to upload a photo or video of themselves to
+        someone else's GPU. For a lot of people, that last part is a non-starter.</p>
+      <p>This project sits at the other end of that trade-off. Instead of one big generative model on a server, it uses
+        three small, fast pieces on the client: a <strong>segmentation model</strong>, a <strong>pose model</strong>,
+        and a <strong>thin-plate-spline garment warp</strong> — all running in the browser via <a
+          href="https://ai.google.dev/edge/litert/web" target="_blank" rel="noopener">LiteRT.js</a> on WebGPU. The
+        preview is instant, and serving it costs exactly what a static site costs: nothing. There's a clear path to a
+        paid, photorealistic server-side tier later, but the free tier is genuinely free — for me and for the user.</p>
+
+      <hr class="seam">
+
+      <h2>See it: original vs. <span class="hl">try-on</span></h2>
+      <p>Drag the seam to compare the input frame with the composited render.</p>
+
+      <div class="compare-section">
+        <p class="compare-label">Before / After — drag the pin</p>
+        <div class="compare" id="compare">
+          <!-- BEFORE layer.
+             To use real screenshots: replace each inline <svg> below with
+             <img src="before.png" alt="..."> and <img src="after.png" alt="...">
+             (two same-size screenshots from the app). -->
+          <div class="layer before" aria-hidden="true">
+            <svg viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+              <rect width="400" height="500" fill="#E9E6DC" />
+              <rect width="400" height="500" fill="url(#g1)" />
+              <defs>
+                <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#F2F0E8" />
+                  <stop offset="1" stop-color="#DDD9CB" />
+                </linearGradient>
+              </defs>
+              <!-- figure -->
+              <circle cx="200" cy="120" r="34" fill="#B58B6B" />
+              <path
+                d="M200 154 C 168 158 150 178 146 210 L 138 320 C 137 334 145 340 154 340 L 160 340 L 168 460 L 232 460 L 240 340 L 246 340 C 255 340 263 334 262 320 L 254 210 C 250 178 232 158 200 154 Z"
+                fill="#8FA0AE" />
+              <path d="M148 205 L 118 300 L 132 306 L 158 232 Z" fill="#B58B6B" />
+              <path d="M252 205 L 282 300 L 268 306 L 242 232 Z" fill="#B58B6B" />
+              <rect x="168" y="440" width="26" height="40" fill="#5E6772" />
+              <rect x="206" y="440" width="26" height="40" fill="#5E6772" />
+              <text x="200" y="34" text-anchor="middle" font-family="Space Mono, monospace" font-size="13"
+                fill="#8A8574" letter-spacing="2">INPUT FRAME</text>
+            </svg>
+          </div>
+          <!-- AFTER layer -->
+          <div class="layer after" aria-hidden="true">
+            <svg viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice">
+              <rect width="400" height="500" fill="#E9E6DC" />
+              <rect width="400" height="500" fill="url(#g2)" />
+              <defs>
+                <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0" stop-color="#F2F0E8" />
+                  <stop offset="1" stop-color="#DDD9CB" />
+                </linearGradient>
+                <pattern id="floral" width="46" height="46" patternUnits="userSpaceOnUse">
+                  <rect width="46" height="46" fill="#31449A" />
+                  <circle cx="12" cy="12" r="5" fill="#E8B4C2" />
+                  <circle cx="34" cy="30" r="6" fill="#F0D8A8" />
+                  <circle cx="24" cy="42" r="3.6" fill="#E8B4C2" />
+                  <circle cx="40" cy="8" r="3" fill="#9FD0C4" />
+                </pattern>
+              </defs>
+              <circle cx="200" cy="120" r="34" fill="#B58B6B" />
+              <!-- warped garment -->
+              <path
+                d="M200 152 C 164 156 146 176 142 210 L 128 350 C 150 366 250 366 272 350 L 258 210 C 254 176 236 156 200 152 Z"
+                fill="url(#floral)" />
+              <path
+                d="M128 350 C 118 420 128 452 138 468 C 176 482 224 482 262 468 C 272 452 282 420 272 350 C 250 366 150 366 128 350 Z"
+                fill="url(#floral)" />
+              <!-- arms restored over fabric (capsule clip) -->
+              <path d="M148 205 L 118 300 L 132 306 L 158 232 Z" fill="#B58B6B" />
+              <path d="M252 205 L 282 300 L 268 306 L 242 232 Z" fill="#B58B6B" />
+              <!-- anchor points -->
+              <g fill="none" stroke="#C99B2E" stroke-width="2">
+                <circle cx="152" cy="176" r="5" />
+                <circle cx="248" cy="176" r="5" />
+                <circle cx="146" cy="290" r="5" />
+                <circle cx="254" cy="290" r="5" />
+                <circle cx="146" cy="452" r="5" />
+                <circle cx="254" cy="452" r="5" />
+              </g>
+              <text x="200" y="34" text-anchor="middle" font-family="Space Mono, monospace" font-size="13"
+                fill="#8A8574" letter-spacing="2">TRY-ON RENDER</text>
+            </svg>
+          </div>
+          <div class="handle" id="handle"></div>
+          <span class="tag tag-before">Original</span>
+          <span class="tag tag-after">Composited</span>
+          <input type="range" id="range" min="0" max="100" value="50"
+            aria-label="Comparison slider between original photo and try-on render">
+        </div>
+        <p class="compare-hint">Gold rings mark the six garment anchors: shoulders, waist, hem. Swap the illustration
+          for real screenshots by replacing the two SVGs with same-size images.</p>
+      </div>
+
+      <figure>
+        <img src="https://github.com/pravoobi/try-on/raw/main/docs/demo.gif"
+          alt="Animated demo: photo try-on across four garments, followed by a WebGPU vs CPU comparison" loading="lazy">
+        <figcaption>Live demo GIF from the repo: photo try-on across garments, then WebGPU vs CPU side by side.
+        </figcaption>
+      </figure>
+
+      <hr class="seam">
+
+      <h2>How the pipeline is <span class="hl">cut</span></h2>
+
+      <pre>webcam/photo ──► [Worker: LiteRT.js]
+                   ├─ segmenter ──► person mask ──────┐
+                   └─ pose ──► 17 keypoints ─► TPS ───┤
+                                                      ▼
+main thread ◄─────────────────── compositor (canvas 2D)</pre>
+
+      <ol class="pipeline">
+        <li><strong>Segmentation.</strong> MediaPipe Selfie Segmenter produces a per-pixel person-confidence mask.</li>
+        <li><strong>Pose estimation.</strong> MoveNet SinglePose Lightning finds 17 body keypoints per frame.</li>
+        <li><strong>The warp.</strong> Six garment anchors — shoulders, waist, hem — are mapped from garment-pixel
+          space onto the detected body with a thin-plate-spline transform, rendered as a coarse mesh of affine-textured
+          triangles. Canvas 2D can't do a true nonlinear warp, so each triangle approximates one locally.</li>
+        <li><strong>Compositing.</strong> The warped garment is clipped to the feathered person mask and drawn over the
+          frame. A capsule-shaped clip restores the original arm pixels on top of the fabric, so a hand-on-hip pose
+          still reads correctly.</li>
+      </ol>
+
+      <p>Both models run inside a Web Worker. Only mask and keypoint results — plus transferred
+        <code>ImageBitmap</code>s — ever cross back to the main thread. The video frame itself never touches the
+        network layer, which turns the "privacy-first" pitch from marketing copy into an architectural fact.</p>
+
+      <hr class="seam">
+
+      <h2>WebGPU is the fast path, not the <span class="hl">only path</span></h2>
+      <p>On a WebGPU-capable browser (Chrome or Edge 113+), LiteRT.js runs both models on the GPU. Everywhere else, the
+        app falls back to a Wasm/XNNPack CPU path — and the UI lets you toggle between the two live, which turns the
+        whole app into its own benchmark.</p>
+
+      <div class="perf">
+        <div class="cell fast">
+          <p class="mode">WebGPU path</p>
+          <p class="num">Real-time</p>
+          <p class="note">Smooth live-webcam try-on; preprocessing stays GPU-resident via tfjs ops sharing LiteRT's
+            WebGPU device.</p>
+        </div>
+        <div class="cell">
+          <p class="mode">Wasm / CPU fallback</p>
+          <p class="num">Works everywhere</p>
+          <p class="note">XNNPack keeps it usable on browsers without WebGPU — noticeably slower, visibly honest about
+            it.</p>
+        </div>
+      </div>
+
+      <hr class="seam">
+
+      <h2>The unglamorous parts that <span class="hl">made it work</span></h2>
+      <p><strong>Real garments, not illustrations.</strong> The four garments shipped in the demo — two floral dresses,
+        an embroidered kurti, a wrap dress — are real product photos. A tooling script removes their backgrounds with a
+        flood-fill color-distance key: a plain per-pixel key would punch transparent holes through any light print
+        motif that resembles the backdrop, so the fill only treats a pixel as background if it's actually
+        <em>connected</em> to the image border.</p>
+      <p><strong>Anchors need a human eye.</strong> The same script suggests the six anchor points, but the heuristic
+        can mistake a puff sleeve's bulge for a shoulder line. Every new garment gets rendered against a test photo and
+        hand-corrected before its anchors are trusted.</p>
+      <p><strong>Framework-free math.</strong> The pipeline layer has no React in it. The TPS solver, keypoint
+        smoothing, and letterbox math are all unit-tested with Vitest, independent of any UI — which is exactly what
+        made iterating on the warp bearable.</p>
+      <p><strong>Deployment is a footnote.</strong> <code>npm run build</code> produces a static <code>dist/</code>;
+        GitHub Actions pushes it to GitHub Pages on every commit to main. Any static host would work identically,
+        because there is simply no server component to provision.</p>
+
+      <hr class="seam">
+
+      <h2>What this architecture <span class="hl">buys you</span></h2>
+      <p>Zero marginal cost per try-on. Zero user data leaving the device. Instant previews with no round trip. And a
+        stack — Vite, React, TypeScript strict, <code>@litertjs/core</code> — that any web team can read without an ML
+        PhD. The photorealistic diffusion render still has its place, but as a paid upgrade for the shopper who wants a
+        print-quality image, not as the toll booth in front of every single preview.</p>
+
+      <div class="cta">
+        <h2>Try it on</h2>
+        <p>Open the demo in a WebGPU browser, load a test photo or your webcam, and toggle the CPU path to feel the
+          difference.</p>
+        <div class="buttons">
+          <a class="primary" href="https://pravoobi.github.io/try-on/" target="_blank" rel="noopener">Open the live
+            demo →</a>
+          <a class="ghost" href="https://github.com/pravoobi/try-on" target="_blank" rel="noopener">Read the source</a>
+        </div>
+      </div>
+
+    </article>
+  </div>
+
+  <footer>
+    <p>Built with LiteRT.js · WebGPU · a hand-rolled thin-plate-spline · and no server whatsoever.</p>
+  </footer>
+
+  <script>
+    // ── CURSOR ──
+    const cur = document.getElementById('cur');
+    document.addEventListener('mousemove', e => {
+      cur.style.left = e.clientX + 'px';
+      cur.style.top = e.clientY + 'px';
+    });
+    document.querySelectorAll('a,button,.compare,.perf .cell').forEach(el => {
+      el.addEventListener('mouseenter', () => cur.classList.add('big'));
+      el.addEventListener('mouseleave', () => cur.classList.remove('big'));
+    });
+
+    // ── SCROLL PROGRESS ──
+    const prog = document.getElementById('prog');
+    window.addEventListener('scroll', () => {
+      prog.style.width = (window.scrollY / (document.body.scrollHeight - innerHeight) * 100) + '%';
+    }, { passive: true });
+
+    // ── COMPARISON SLIDER ──
+    (function () {
+      const compare = document.getElementById('compare');
+      const after = compare.querySelector('.after');
+      const handle = document.getElementById('handle');
+      const range = document.getElementById('range');
+      function setPos(pct) {
+        pct = Math.max(0, Math.min(100, pct));
+        after.style.clipPath = 'inset(0 0 0 ' + pct + '%)';
+        handle.style.left = pct + '%';
+        range.value = pct;
+      }
+      range.addEventListener('input', function () { setPos(parseFloat(range.value)); });
+      // pointer drag (works for touch + mouse, on top of the range input for a11y)
+      function fromEvent(e) {
+        const rect = compare.getBoundingClientRect();
+        const x = (e.touches ? e.touches[0].clientX : e.clientX) - rect.left;
+        setPos(x / rect.width * 100);
+      }
+      let dragging = false;
+      compare.addEventListener('pointerdown', function (e) { dragging = true; fromEvent(e); });
+      window.addEventListener('pointermove', function (e) { if (dragging) fromEvent(e); });
+      window.addEventListener('pointerup', function () { dragging = false; });
+      setPos(50);
+    })();
+  </script>
+</body>
+
+</html>
